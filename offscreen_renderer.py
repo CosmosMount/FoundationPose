@@ -12,14 +12,12 @@ code_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(code_path)
 import open3d as o3d
 import numpy as np
-from PIL import Image
 import cv2,imageio
 import time
 import trimesh
 import pyrender
 from transformations import *
 import numpy as np
-from PIL import Image
 import cv2
 import time
 import argparse,pickle

@@ -496,8 +496,8 @@ class YcbVideoReader(BopBaseReader):
     mesh.vertices *= 1e-3
     tex_file = mesh_file.replace('.ply','.png')
     if os.path.exists(tex_file):
-      from PIL import Image
-      im = Image.open(tex_file)
+      import PIL
+      im = PIL.Image.open(tex_file)
       uv = mesh.visual.uv
       material = trimesh.visual.texture.SimpleMaterial(image=im)
       color_visuals = trimesh.visual.TextureVisuals(uv=uv, image=im, material=material)

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Image Mask Painter</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      margin: 20px;
+    }
+    #canvas-container {
+      position: relative;
+      display: inline-block;
+    }
+    canvas {
+      border: 1px solid #333;
+      cursor: crosshair;
+    }
+    #controls {
+      margin: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Image Mask Painter</h1>
+
+  <input type="file" id="upload" accept="image/*">
+  <div id="controls">
+    <button id="clear">清除</button>
+    <button id="export">导出 Mask</button>
+    <label>画笔大小: <input type="range" id="brushSize" min="1" max="50" value="10"></label>
+  </div>
+
+  <div id="canvas-container">
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <script>
+    const upload = document.getElementById('upload');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const clearBtn = document.getElementById('clear');
+    const exportBtn = document.getElementById('export');
+    const brushSizeInput = document.getElementById('brushSize');
+
+    let painting = false;
+    let brushSize = parseInt(brushSizeInput.value);
+    let imageWidth, imageHeight;
+
+    // Mask canvas (black/white)
+    const maskCanvas = document.createElement('canvas');
+    const maskCtx = maskCanvas.getContext('2d');
+
+    upload.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const img = new Image();
+      img.onload = () => {
+        imageWidth = img.width;
+        imageHeight = img.height;
+
+        canvas.width = imageWidth;
+        canvas.height = imageHeight;
+
+        maskCanvas.width = imageWidth;
+        maskCanvas.height = imageHeight;
+
+        ctx.drawImage(img, 0, 0);
+        maskCtx.fillStyle = 'black';
+        maskCtx.fillRect(0, 0, imageWidth, imageHeight);
+      };
+      img.src = URL.createObjectURL(file);
+    });
+
+    function startPosition(e) {
+      painting = true;
+      draw(e);
+    }
+
+    function endPosition() {
+      painting = false;
+      ctx.beginPath();
+      maskCtx.beginPath();
+    }
+
+    function draw(e) {
+      if (!painting) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      // Draw white stroke on mask
+      maskCtx.fillStyle = 'white';
+      maskCtx.beginPath();
+      maskCtx.arc(x, y, brushSize, 0, Math.PI * 2);
+      maskCtx.fill();
+
+      // Draw stroke on visible canvas
+      ctx.strokeStyle = 'red';
+      ctx.lineWidth = brushSize * 2;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineTo(x, y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+    }
+
+    canvas.addEventListener('mousedown', startPosition);
+    canvas.addEventListener('mouseup', endPosition);
+    canvas.addEventListener('mouseout', endPosition);
+    canvas.addEventListener('mousemove', draw);
+
+    clearBtn.addEventListener('click', () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      maskCtx.fillStyle = 'black';
+      maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+      // redraw original image
+      const img = new Image();
+      img.src = canvas.toDataURL(); // placeholder, just clear red strokes
+    });
+
+    brushSizeInput.addEventListener('input', () => {
+      brushSize = parseInt(brushSizeInput.value);
+    });
+
+    exportBtn.addEventListener('click', () => {
+      const link = document.createElement('a');
+      link.download = 'mask.png';
+      link.href = maskCanvas.toDataURL();
+      link.click();
+    });
+  </script>
+</body>
+</html>

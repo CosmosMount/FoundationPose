@@ -24,7 +24,7 @@ import pandas as pd
 import open3d as o3d
 from uuid import uuid4
 import cv2
-from PIL import Image
+import PIL
 import numpy as np
 from collections import defaultdict
 import multiprocessing as mp
@@ -658,7 +658,7 @@ def cv_draw_text(img,text,uv_top_left,color=(255, 255, 255),fontScale=0.5,thickn
 def trimesh_add_pure_colored_texture(mesh, color=np.array([255,255,255]), resolution=5):
   tex_img = np.tile(color.reshape(1,1,3), (resolution, resolution, 1)).astype(np.uint8)
   mesh = mesh.unwrap()
-  mesh.visual = trimesh.visual.texture.TextureVisuals(uv=mesh.visual.uv,image=Image.fromarray(tex_img))
+  mesh.visual = trimesh.visual.texture.TextureVisuals(uv=mesh.visual.uv,image=PIL.Image.fromarray(tex_img))
   return mesh
 
 
