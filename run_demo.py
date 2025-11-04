@@ -20,8 +20,8 @@ if __name__=='__main__':
   code_dir = os.path.dirname(os.path.realpath(__file__))
   # parser.add_argument('--mesh_file', type=str, default=f'{code_dir}/demo_data/mustard0/mesh/textured_simple.obj')
   # parser.add_argument('--test_scene_dir', type=str, default=f'{code_dir}/demo_data/mustard0')
-  parser.add_argument('--mesh_file', type=str, default=f'{code_dir}/demo_data/data2/mesh/magic.obj')
-  parser.add_argument('--test_scene_dir', type=str, default=f'{code_dir}/demo_data/data2')
+  parser.add_argument('--mesh_file', type=str, default=f'{code_dir}/demo_data/data4/mesh/chair.obj')
+  parser.add_argument('--test_scene_dir', type=str, default=f'{code_dir}/demo_data/data4')
   parser.add_argument('--est_refine_iter', type=int, default=5)
   parser.add_argument('--track_refine_iter', type=int, default=2)
   parser.add_argument('--debug', type=int, default=1)
@@ -32,7 +32,7 @@ if __name__=='__main__':
   set_seed(0)
 
   mesh = trimesh.load(args.mesh_file)
-  tex_img = PIL.Image.open(f'{code_dir}/demo_data/data2/mesh/magic_tex0.png').convert("RGB")
+  tex_img = PIL.Image.open(f'{code_dir}/demo_data/data4/mesh/chair_tex0.png').convert("RGB")
   mesh.visual.material.image = tex_img
 
   debug = args.debug

@@ -16,7 +16,7 @@ class MaskAndIntrinsicsNode(Node):
         super().__init__('mask_and_intrinsics_node')
 
         # 初始化路径（FoundationPose 直接会读取这里）
-        self.base_dir = "demo_data/data2"
+        self.base_dir = "demo_data/data4"
         self.color_dir = os.path.join(self.base_dir, "rgb")
         self.depth_dir = os.path.join(self.base_dir, "depth")
         self.masks_dir = os.path.join(self.base_dir, "masks")
@@ -26,7 +26,9 @@ class MaskAndIntrinsicsNode(Node):
             os.makedirs(d, exist_ok=True)
 
         # YOLO 模型加载
-        self.model = YOLO("/home/cosmosmount/Desktop/object_pose_estimation/yolo/weights/detect/train2/weights/best.pt")
+        self.yolo_dir = "yolo/detect/train2"
+        self.model_path = os.path.join(self.yolo_dir, "weights/best.pt")
+        self.model = YOLO(self.model_path)
 
         # 订阅相机话题
         self.bridge = CvBridge()
