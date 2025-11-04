@@ -24,7 +24,7 @@ class FoundationPoseNode(Node):
     def __init__(self):
         super().__init__('foundationpose_node')
 
-        self.base_dir = "demo_data/data4"
+        self.base_dir = "demo_data/data7"
         self.color_dir = os.path.join(self.base_dir, "rgb")
         self.depth_dir = os.path.join(self.base_dir, "depth")
         self.masks_dir = os.path.join(self.base_dir, "masks")

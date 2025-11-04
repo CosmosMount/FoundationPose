@@ -11,32 +11,27 @@ from estimater import *
 from datareader import *
 import argparse
 import trimesh
-# from inference import get_model
-# import supervision as sv
 
 
 if __name__=='__main__':
   parser = argparse.ArgumentParser()
   code_dir = os.path.dirname(os.path.realpath(__file__))
-  # parser.add_argument('--mesh_file', type=str, default=f'{code_dir}/demo_data/mustard0/mesh/textured_simple.obj')
-  # parser.add_argument('--test_scene_dir', type=str, default=f'{code_dir}/demo_data/mustard0')
-  parser.add_argument('--mesh_file', type=str, default=f'{code_dir}/demo_data/data4/mesh/chair.obj')
-  parser.add_argument('--test_scene_dir', type=str, default=f'{code_dir}/demo_data/data4')
-  parser.add_argument('--est_refine_iter', type=int, default=5)
-  parser.add_argument('--track_refine_iter', type=int, default=2)
-  parser.add_argument('--debug', type=int, default=1)
-  parser.add_argument('--debug_dir', type=str, default=f'{code_dir}/debug')
-  args = parser.parse_args()
+
+  mesh_dir = "meshes/chair2/"
+  mesh_file = os.path.join(mesh_dir, "chair.obj")
+  tex_file = os.path.join(mesh_dir, "chair_tex0.png")
+  test_scene_dir = "demo_data/data7"
+
 
   set_logging_format()
   set_seed(0)
 
-  mesh = trimesh.load(args.mesh_file)
-  tex_img = PIL.Image.open(f'{code_dir}/demo_data/data4/mesh/chair_tex0.png').convert("RGB")
+  mesh = trimesh.load(mesh_file)
+  tex_img = PIL.Image.open(tex_file).convert("RGB")
   mesh.visual.material.image = tex_img
 
-  debug = args.debug
-  debug_dir = args.debug_dir
+  debug = 1
+  debug_dir = "debug"
   os.system(f'rm -rf {debug_dir}/* && mkdir -p {debug_dir}/track_vis {debug_dir}/ob_in_cam')
 
   to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
@@ -48,7 +43,7 @@ if __name__=='__main__':
   est = FoundationPose(model_pts=mesh.vertices, model_normals=mesh.vertex_normals, mesh=mesh, scorer=scorer, refiner=refiner, debug_dir=debug_dir, debug=debug, glctx=glctx)
   logging.info("estimator initialization done")
 
-  reader = YcbineoatReader(video_dir=args.test_scene_dir, shorter_side=None, zfar=np.inf)
+  reader = YcbineoatReader(video_dir=test_scene_dir, shorter_side=None, zfar=np.inf)
 
   for i in range(len(reader.color_files)):
     logging.info(f'i:{i}')
@@ -56,7 +51,7 @@ if __name__=='__main__':
     depth = reader.get_depth(i)
     if i==0:
       mask = reader.get_mask(0).astype(bool)
-      pose = est.register(K=reader.K, rgb=color, depth=depth, ob_mask=mask, iteration=args.est_refine_iter)
+      pose = est.register(K=reader.K, rgb=color, depth=depth, ob_mask=mask, iteration=5)
 
       if debug>=3:
         m = mesh.copy()
@@ -67,7 +62,7 @@ if __name__=='__main__':
         pcd = toOpen3dCloud(xyz_map[valid], color[valid])
         o3d.io.write_point_cloud(f'{debug_dir}/scene_complete.ply', pcd)
     else:
-      pose = est.track_one(rgb=color, depth=depth, K=reader.K, iteration=args.track_refine_iter)
+      pose = est.track_one(rgb=color, depth=depth, K=reader.K, iteration=2)
 
     if debug>=1:
       center_pose = pose@np.linalg.inv(to_origin)
