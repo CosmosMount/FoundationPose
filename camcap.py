@@ -16,7 +16,7 @@ class RealsenseSaver(Node):
         self.bridge = CvBridge()
 
         # 保存路径
-        self.base_dir = "demo_data/data7"
+        self.base_dir = "demo_data/data8"
         self.color_dir = os.path.join(self.base_dir, "rgb")
         self.depth_dir = os.path.join(self.base_dir, "depth")
         for d in [self.color_dir, self.depth_dir]:

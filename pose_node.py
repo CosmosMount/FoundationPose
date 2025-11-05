@@ -24,12 +24,13 @@ class FoundationPoseNode(Node):
     def __init__(self):
         super().__init__('foundationpose_node')
 
-        self.base_dir = "demo_data/data7"
+        self.base_dir = "demo_data/data8"
         self.color_dir = os.path.join(self.base_dir, "rgb")
         self.depth_dir = os.path.join(self.base_dir, "depth")
         self.masks_dir = os.path.join(self.base_dir, "masks")
-        self.mesh_file = os.path.join(self.base_dir, "mesh/chair.obj")
-        self.tex_file = os.path.join(self.base_dir, "mesh/chair_tex0.png")
+        mesh_dir = "meshes/chair3/"
+        self.mesh_file = os.path.join(mesh_dir, "chair.obj")
+        self.tex_file = os.path.join(mesh_dir, "chair_tex0.png")
         self.debug_dir = "debug"
         self.est_refine_iter = 5
         self.track_refine_iter = 2

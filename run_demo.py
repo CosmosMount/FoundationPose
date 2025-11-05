@@ -17,10 +17,10 @@ if __name__=='__main__':
   parser = argparse.ArgumentParser()
   code_dir = os.path.dirname(os.path.realpath(__file__))
 
-  mesh_dir = "meshes/chair2/"
+  mesh_dir = "meshes/chair3/"
   mesh_file = os.path.join(mesh_dir, "chair.obj")
   tex_file = os.path.join(mesh_dir, "chair_tex0.png")
-  test_scene_dir = "demo_data/data7"
+  test_scene_dir = "demo_data/data8"
 
 
   set_logging_format()

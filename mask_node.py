@@ -16,7 +16,7 @@ class MaskAndIntrinsicsNode(Node):
         super().__init__('mask_and_intrinsics_node')
 
         # 初始化路径（FoundationPose 直接会读取这里）
-        self.base_dir = "demo_data/data7"
+        self.base_dir = "demo_data/data8"
         self.color_dir = os.path.join(self.base_dir, "rgb")
         self.depth_dir = os.path.join(self.base_dir, "depth")
         self.masks_dir = os.path.join(self.base_dir, "masks")
