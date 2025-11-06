@@ -40,7 +40,7 @@ class RealSenseYoloNode(Node):
         frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
         # ✅ 推理
-        results = self.model.predict(frame, imgsz=640, conf=0.5, verbose=False)[0]
+        results = self.model.predict(frame, imgsz=640, conf=0.5, verbose=False, device='cpu')[0]
         detections = sv.Detections.from_ultralytics(results)
 
         # ✅ 绘制检测结果

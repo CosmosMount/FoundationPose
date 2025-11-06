@@ -61,6 +61,7 @@ class MaskAndIntrinsicsNode(Node):
         """保存相机内参矩阵 K"""
         if not self.intrinsics_saved:
             K = np.array(msg.k).reshape(3, 3)
+            self.orig_K = K.copy()
             intr_path = os.path.join(self.base_dir, "cam_K.txt")
             np.savetxt(intr_path, K, fmt="%.6f")
             self.intrinsics_saved = True
@@ -73,7 +74,14 @@ class MaskAndIntrinsicsNode(Node):
         color = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
         depth = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
 
-        frame = color.copy()
+        scale = 0.5
+        new_w = int(color.shape[1] * scale)
+        new_h = int(color.shape[0] * scale)
+
+        color_resized = cv2.resize(color, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        depth_resized = cv2.resize(depth, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+
+        frame = color_resized.copy()
         results = self.model.predict(frame, imgsz=640, conf=0.5, verbose=False)[0]
         detections = sv.Detections.from_ultralytics(results)
 
@@ -81,8 +89,21 @@ class MaskAndIntrinsicsNode(Node):
             self.get_logger().info("⚠️ 未检测到目标，等待下一帧...")
             return
         
+        if hasattr(self, "orig_K"):
+            K_scaled = self.orig_K.copy()
+            K_scaled[0, 0] *= scale   # fx
+            K_scaled[1, 1] *= scale   # fy
+            K_scaled[0, 2] *= scale   # cx
+            K_scaled[1, 2] *= scale   # cy
+
+            intr_path = os.path.join(self.base_dir, "cam_K.txt")
+            np.savetxt(intr_path, K_scaled, fmt="%.6f")
+            self.get_logger().info(f"📏 已保存缩放后内参到 {intr_path}\n{K_scaled}")
+        else:
+            self.get_logger().warn("⚠️ 未接收到原始内参，无法缩放 K")
+        
         x1, y1, x2, y2 = map(int, detections.xyxy[0])
-        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+        mask = np.zeros((new_h, new_w), dtype=np.uint8)
         mask[y1:y2, x1:x2] = 255
         
         timestamp = f"{color_msg.header.stamp.sec % 100000}_{color_msg.header.stamp.nanosec // 1000000:03d}"
@@ -90,8 +111,8 @@ class MaskAndIntrinsicsNode(Node):
         depth_path = os.path.join(self.depth_dir, f"{timestamp}.png")
         masks_path = os.path.join(self.masks_dir, f"{timestamp}.png")
 
-        cv2.imwrite(color_path, color)
-        cv2.imwrite(depth_path, depth)
+        cv2.imwrite(color_path, color_resized)
+        cv2.imwrite(depth_path, depth_resized)
         cv2.imwrite(masks_path, mask)
 
         self.first_frame_saved = True

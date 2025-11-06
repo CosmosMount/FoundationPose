@@ -66,12 +66,20 @@ class FoundationPoseNode(Node):
             return
         color = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
         depth = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
+        
+        scale = 0.5
+        new_w = int(color.shape[1] * scale)
+        new_h = int(color.shape[0] * scale)
+
+        color_resized = cv2.resize(color, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        depth_resized = cv2.resize(depth, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+
         timestamp = f"{color_msg.header.stamp.sec % 100000}_{color_msg.header.stamp.nanosec // 1000000:03d}"
         color_path = os.path.join(self.color_dir, f"{timestamp}.png")
         depth_path = os.path.join(self.depth_dir, f"{timestamp}.png")
 
-        cv2.imwrite(color_path, color)
-        cv2.imwrite(depth_path, depth)
+        cv2.imwrite(color_path, color_resized)
+        cv2.imwrite(depth_path, depth_resized)
 
         self.get_logger().info(f"✅ 保存帧 {color_path}, {depth_path}")
 
