@@ -73,3 +73,16 @@ We use RGB-D camera for detection.
 ```bash
 ros2 launch realsense2_camera rs_launch.py align_depth.enable:=true
 ```
+topics:
+- /camera/camera/color/camera_info
+- /camera/camera/color/image_raw
+- /camera/camera/aligned_depth_to_color/image_raw
+
+For ROS1
+```bash
+roslaunch realsense2_camera rs_camera.launch align_depth:=true
+```
+topics:
+- /camera/color/camera_info
+- /camera/color/image_raw
+- /camera/aligned_depth_to_color/image_raw
