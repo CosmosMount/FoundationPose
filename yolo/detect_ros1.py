@@ -2,7 +2,7 @@
 import os
 import rospy
 from sensor_msgs.msg import Image
-from std_msgs.msg import Bool  # ✅ 改为Bool
+from std_msgs.msg import Bool
 from cv_bridge import CvBridge
 from ultralytics import YOLO
 import supervision as sv

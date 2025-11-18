@@ -1,6 +1,14 @@
 
 import os
 import cv2
+
+# os.environ['CUDA_HOME'] = '/usr/local/cuda'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+
+# cuda_lib_path = '/usr/local/cuda/lib64'
+# if cuda_lib_path not in os.environ.get('LD_LIBRARY_PATH', ''):
+#     os.environ['LD_LIBRARY_PATH'] = f"{cuda_lib_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
+
 import rospy
 import shutil
 import numpy as np
@@ -14,17 +22,25 @@ from cv_bridge import CvBridge
 from ultralytics import YOLO
 import supervision as sv
 from collections import deque
+import message_filters
+
+print(f"🔍 CUDA Debug Info:")
+print(f"   torch.cuda.is_available(): {torch.cuda.is_available()}")
+print(f"   torch.cuda.device_count(): {torch.cuda.device_count()}")
+if torch.cuda.is_available():
+    print(f"   torch.cuda.get_device_name(0): {torch.cuda.get_device_name(0)}")
+    print(f"   torch.version.cuda: {torch.version.cuda}")
 
 from estimater import *
 from datareader import *
-
-# 新增 message_filters
-import message_filters
 
 class FoundationPoseEstimator:
     def __init__(self):
         rospy.init_node('foundation_pose_estimator', anonymous=True)
         
+        # device_count = torch.cuda.device_count()
+        # rospy.loginfo(f"🖥️  CUDA devices after ROS init: {device_count}")
+
         # ==================== 配置参数 ====================
         self.base_dir = rospy.get_param('~base_dir', 'demo_data/data_realtime')
         self.color_dir = os.path.join(self.base_dir, 'rgb')
@@ -43,6 +59,15 @@ class FoundationPoseEstimator:
         self.yolo_dir = "yolo/detect/train2"
         self.model_path = os.path.join(self.yolo_dir, "weights/best.pt")
         
+        from datetime import datetime
+        self.timestamp_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.results_dir = os.path.join('results', self.timestamp_prefix)
+        os.makedirs(self.results_dir, exist_ok=True)
+        rospy.loginfo(f"📂 Results will be saved to: {self.results_dir}")
+    
+        # 用于记录本次运行保存了多少张图片
+        self.saved_vis_count = 0
+
         # YOLO安全加载
         try:
             from torch.nn.modules.container import Sequential
@@ -91,7 +116,7 @@ class FoundationPoseEstimator:
         rospy.Subscriber('/camera/color/camera_info', CameraInfo, self.camera_info_callback, queue_size=10)
         
         # ApproximateTimeSynchronizer 同步 RGB+Depth+CameraInfo
-        ats = message_filters.ApproximateTimeSynchronizer([color_sub, depth_sub], queue_size=10, slop=0.05)
+        ats = message_filters.ApproximateTimeSynchronizer([color_sub, depth_sub], queue_size=30, slop=0.5)
         ats.registerCallback(self.synced_callback)
         
         self.pose_pub = rospy.Publisher('/object_pose', PoseStamped, queue_size=10)
@@ -117,8 +142,77 @@ class FoundationPoseEstimator:
             self.intrinsics_saved = True
             rospy.loginfo(f"📸 Camera intrinsics received:\n{self.orig_K}")
     
-    def synced_callback(self, color_msg, depth_msg):
+    # def synced_callback(self, color_msg, depth_msg):
 
+    #     if not self.detection_triggered or self.frame_count >= self.num_frames:
+    #         return
+
+    #     rospy.loginfo("🔔 synced_callback triggered")
+
+    #     # 转CV图像
+    #     color = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
+    #     depth = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
+        
+    #     results = self.model.predict(color, imgsz=640, conf=0.5, verbose=False, device='cpu')[0]
+    #     detections = sv.Detections.from_ultralytics(results)
+        
+    #     if len(detections.xyxy) == 0:
+    #         rospy.logwarn("⚠️ No object detected in original frame, skipping...")
+    #         return
+        
+    #     # 获取原始图像上的检测框
+    #     x1_orig, y1_orig, x2_orig, y2_orig = map(int, detections.xyxy[0])
+    #     rospy.loginfo(f"🎯 Detected bbox (original): [{x1_orig}, {y1_orig}, {x2_orig}, {y2_orig}]")
+
+    #     # 缩放
+    #     new_w = int(color.shape[1] * self.scale)
+    #     new_h = int(color.shape[0] * self.scale)
+    #     color_resized = cv2.resize(color, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    #     depth_resized = cv2.resize(depth, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+        
+    #     # cv2.imshow('Camera RGB', color_resized)
+
+    #     # YOLO检测
+    #     # results = self.model.predict(color_resized, imgsz=640, conf=0.5, verbose=False)[0]
+    #     # detections = sv.Detections.from_ultralytics(results)
+    #     # if len(detections.xyxy) == 0:
+    #     #     rospy.logwarn("⚠️ No object detected in frame, skipping...")
+    #     #     return
+        
+    #     # mask
+    #     x1 = int(x1_orig * self.scale)
+    #     y1 = int(y1_orig * self.scale)
+    #     x2 = int(x2_orig * self.scale)
+    #     y2 = int(y2_orig * self.scale)
+    #     mask = np.zeros((new_h, new_w), dtype=np.uint8)
+    #     mask[y1:y2, x1:x2] = 255
+        
+    #     # 保存
+    #     timestamp = f"{self.frame_count:06d}"
+    #     cv2.imwrite(os.path.join(self.color_dir, f"{timestamp}.png"), color_resized)
+    #     cv2.imwrite(os.path.join(self.depth_dir, f"{timestamp}.png"), depth_resized)
+    #     cv2.imwrite(os.path.join(self.masks_dir, f"{timestamp}.png"), mask)
+        
+    #     # 缩放内参
+    #     if self.frame_count == 0 and self.orig_K is not None:
+    #         K_scaled = self.orig_K.copy()
+    #         K_scaled[0, 0] *= self.scale
+    #         K_scaled[1, 1] *= self.scale
+    #         K_scaled[0, 2] *= self.scale
+    #         K_scaled[1, 2] *= self.scale
+    #         np.savetxt(os.path.join(self.base_dir, 'cam_K.txt'), K_scaled, fmt='%.6f')
+    #         rospy.loginfo(f"📏 Saved scaled intrinsics:\n{K_scaled}")
+        
+    #     self.frame_count += 1
+    #     rospy.loginfo(f"💾 Saved frame {self.frame_count}/{self.num_frames}")
+        
+    #     if self.frame_count == self.num_frames:
+    #         rospy.loginfo("🚀 All frames collected. Starting FoundationPose estimation...")
+    #         self.run_foundation_pose()
+
+    def synced_callback(self, color_msg, depth_msg):
+        """同步的 RGB + Depth 回调（不缩放版本）"""
+        
         if not self.detection_triggered or self.frame_count >= self.num_frames:
             return
 
@@ -128,39 +222,33 @@ class FoundationPoseEstimator:
         color = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
         depth = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
         
-        # 缩放
-        new_w = int(color.shape[1] * self.scale)
-        new_h = int(color.shape[0] * self.scale)
-        color_resized = cv2.resize(color, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        depth_resized = cv2.resize(depth, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
-        
         # YOLO检测
-        results = self.model.predict(color_resized, imgsz=640, conf=0.5, verbose=False)[0]
+        results = self.model.predict(color, imgsz=640, conf=0.5, verbose=False, device='cpu')[0]
         detections = sv.Detections.from_ultralytics(results)
+        
         if len(detections.xyxy) == 0:
             rospy.logwarn("⚠️ No object detected in frame, skipping...")
             return
         
-        # mask
+        # 获取检测框
         x1, y1, x2, y2 = map(int, detections.xyxy[0])
-        mask = np.zeros((new_h, new_w), dtype=np.uint8)
+        rospy.loginfo(f"🎯 Detected bbox: [{x1}, {y1}, {x2}, {y2}]")
+        
+        # 生成 mask（不缩放）
+        h, w = color.shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
         mask[y1:y2, x1:x2] = 255
         
-        # 保存
+        # 保存原始尺寸图像
         timestamp = f"{self.frame_count:06d}"
-        cv2.imwrite(os.path.join(self.color_dir, f"{timestamp}.png"), color_resized)
-        cv2.imwrite(os.path.join(self.depth_dir, f"{timestamp}.png"), depth_resized)
+        cv2.imwrite(os.path.join(self.color_dir, f"{timestamp}.png"), color)
+        cv2.imwrite(os.path.join(self.depth_dir, f"{timestamp}.png"), depth)
         cv2.imwrite(os.path.join(self.masks_dir, f"{timestamp}.png"), mask)
         
-        # 缩放内参
+        # 保存原始内参（仅第一帧）
         if self.frame_count == 0 and self.orig_K is not None:
-            K_scaled = self.orig_K.copy()
-            K_scaled[0, 0] *= self.scale
-            K_scaled[1, 1] *= self.scale
-            K_scaled[0, 2] *= self.scale
-            K_scaled[1, 2] *= self.scale
-            np.savetxt(os.path.join(self.base_dir, 'cam_K.txt'), K_scaled, fmt='%.6f')
-            rospy.loginfo(f"📏 Saved scaled intrinsics:\n{K_scaled}")
+            np.savetxt(os.path.join(self.base_dir, 'cam_K.txt'), self.orig_K, fmt='%.6f')
+            rospy.loginfo(f"📏 Saved original intrinsics:\n{self.orig_K}")
         
         self.frame_count += 1
         rospy.loginfo(f"💾 Saved frame {self.frame_count}/{self.num_frames}")
@@ -172,15 +260,18 @@ class FoundationPoseEstimator:
     def run_foundation_pose(self):
         """运行FoundationPose位姿估计"""
         try:
+            
             mesh = trimesh.load(self.mesh_file)
             tex_img = PIL.Image.open(self.tex_file).convert('RGB')
             mesh.visual.material.image = tex_img
             
             to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
             bbox = np.stack([-extents / 2, extents / 2], axis=0).reshape(2, 3)
-            
+            print("Loaded")
             scorer = ScorePredictor()
+            print("ScorePredictor done")
             refiner = PoseRefinePredictor()
+            print("RefinePredictor done")
             glctx = dr.RasterizeCudaContext()
             est = FoundationPose(
                 model_pts=mesh.vertices,
@@ -221,13 +312,19 @@ class FoundationPoseEstimator:
                 
                 self.pose_queue.append(pose)
                 
-                if self.debug >= 1:
-                    center_pose = pose @ np.linalg.inv(to_origin)
-                    vis = draw_posed_3d_box(reader.K, img=color, ob_in_cam=center_pose, bbox=bbox)
-                    vis = draw_xyz_axis(color, ob_in_cam=center_pose, scale=0.1, K=reader.K,
-                                       thickness=3, transparency=0, is_input_rgb=True)
-                    # cv2.imshow('FoundationPose', vis[..., ::-1])
-                    # cv2.waitKey(1)
+                # if self.debug >= 1:
+                center_pose = pose @ np.linalg.inv(to_origin)
+                vis = draw_posed_3d_box(reader.K, img=color, ob_in_cam=center_pose, bbox=bbox)
+                vis = draw_xyz_axis(color, ob_in_cam=center_pose, scale=0.1, K=reader.K,
+                                    thickness=3, transparency=0, is_input_rgb=True)
+                
+                vis_filename = f"frame_{self.saved_vis_count:04d}.png"
+                vis_path = os.path.join(self.results_dir, vis_filename)
+                cv2.imwrite(vis_path, vis[..., ::-1])  # RGB to BGR
+                rospy.loginfo(f"💾 Saved visualization: {vis_path}")
+                self.saved_vis_count += 1
+                # cv2.imshow('FoundationPose', vis[..., ::-1])
+                # cv2.waitKey(1)
             
             avg_pose = self.compute_average_pose()
             self.publish_pose(avg_pose)

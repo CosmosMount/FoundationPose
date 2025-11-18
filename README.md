@@ -86,3 +86,12 @@ topics:
 - /camera/color/camera_info
 - /camera/color/image_raw
 - /camera/aligned_depth_to_color/image_raw
+
+### Pose Estimation
+For ROS2
+For Deployment on robot
+```bash
+source /opt/ros/noetic/bin/setup.bash
+```
+Multi port communication
+
