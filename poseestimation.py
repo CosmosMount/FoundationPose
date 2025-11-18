@@ -15,7 +15,7 @@ import numpy as np
 import trimesh
 import PIL.Image
 import torch
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float32MultiArray
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PoseStamped
 from cv_bridge import CvBridge
@@ -37,15 +37,18 @@ from datareader import *
 class FoundationPoseEstimator:
     def __init__(self):
         rospy.init_node('foundation_pose_estimator', anonymous=True)
-        
-        # device_count = torch.cuda.device_count()
-        # rospy.loginfo(f"🖥️  CUDA devices after ROS init: {device_count}")
 
         # ==================== 配置参数 ====================
         self.base_dir = rospy.get_param('~base_dir', 'demo_data/data_realtime')
         self.color_dir = os.path.join(self.base_dir, 'rgb')
         self.depth_dir = os.path.join(self.base_dir, 'depth')
         self.masks_dir = os.path.join(self.base_dir, 'masks')
+
+        self.state_sub = rospy.Subscriber(
+            '/start_detect_obj',
+            Bool,
+            self.state_command_callback,
+            queue_size=10)
         
         for d in [self.color_dir, self.depth_dir, self.masks_dir]:
             if os.path.exists(d):
@@ -68,6 +71,8 @@ class FoundationPoseEstimator:
         # 用于记录本次运行保存了多少张图片
         self.saved_vis_count = 0
 
+        self.detected = False
+
         # YOLO安全加载
         try:
             from torch.nn.modules.container import Sequential
@@ -89,12 +94,17 @@ class FoundationPoseEstimator:
             self.model = YOLO(self.model_path)
             torch.load = original_load
         
-        self.num_frames = rospy.get_param('~num_frames', 5)
+        self.num_frames = rospy.get_param('~num_frames', 10)
         self.scale = rospy.get_param('~scale', 0.5)
         self.est_refine_iter = rospy.get_param('~est_refine_iter', 5)
         self.track_refine_iter = rospy.get_param('~track_refine_iter', 2)
         self.debug = rospy.get_param('~debug', 1)
         self.debug_dir = rospy.get_param('~debug_dir', 'debug')
+
+        self.detected_pub = rospy.Publisher('/object_detection', Bool, queue_size=10)
+        self.pose_pub = rospy.Publisher('/object_6d_pose', Float32MultiArray, queue_size=10)
+        self.find_object = False
+        # self.test_timer = rospy.Timer(rospy.Duration(0.1), self.detection_callback)
         
         # ==================== 状态变量 ====================
         self.bridge = CvBridge()
@@ -108,9 +118,7 @@ class FoundationPoseEstimator:
         self.box_annotator = sv.BoxAnnotator(thickness=2)
         self.label_annotator = sv.LabelAnnotator(text_scale=1, text_thickness=1)
         
-        # ==================== ROS订阅与同步回调 ====================
-        rospy.Subscriber('/chair/detected', Bool, self.detection_callback, queue_size=10)
-        
+        # ==================== ROS订阅与同步回调 ====================        
         color_sub = message_filters.Subscriber('/camera/color/image_raw', Image)
         depth_sub = message_filters.Subscriber('/camera/aligned_depth_to_color/image_raw', Image)
         rospy.Subscriber('/camera/color/camera_info', CameraInfo, self.camera_info_callback, queue_size=10)
@@ -119,18 +127,20 @@ class FoundationPoseEstimator:
         ats = message_filters.ApproximateTimeSynchronizer([color_sub, depth_sub], queue_size=30, slop=0.5)
         ats.registerCallback(self.synced_callback)
         
-        self.pose_pub = rospy.Publisher('/object_pose', PoseStamped, queue_size=10)
+
         
         set_logging_format()
         set_seed(0)
         
-        rospy.loginfo("🟢 FoundationPoseEstimator initialized. Waiting for /detected_msg...")
+        rospy.loginfo("🟢 FoundationPoseEstimator initialized.")
 
-    def detection_callback(self, msg):
-        if msg.data and not self.detection_triggered:
-            self.detection_triggered = True
-            self.frame_count = 0
-            rospy.loginfo(f"✅ Detection triggered! Starting to record {self.num_frames} frames...")
+    # def detection_callback(self, event):
+    #     rospy.loginfo("🔔 Timer triggered, publishing detection message...")
+    #     self.detected_pub.publish(Bool(data=True))  
+    #     # if msg.data and not self.detection_triggered:
+    #     #     self.detection_triggered = True
+    #     #     self.frame_count = 0
+    #     #     rospy.loginfo(f"✅ Detection triggered! Starting to record {self.num_frames} frames...")
 
     def camera_info_callback(self, msg):
         """保存相机内参矩阵 K"""
@@ -141,82 +151,24 @@ class FoundationPoseEstimator:
             np.savetxt(intr_path, K, fmt="%.6f")
             self.intrinsics_saved = True
             rospy.loginfo(f"📸 Camera intrinsics received:\n{self.orig_K}")
-    
-    # def synced_callback(self, color_msg, depth_msg):
 
-    #     if not self.detection_triggered or self.frame_count >= self.num_frames:
-    #         return
-
-    #     rospy.loginfo("🔔 synced_callback triggered")
-
-    #     # 转CV图像
-    #     color = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
-    #     depth = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
-        
-    #     results = self.model.predict(color, imgsz=640, conf=0.5, verbose=False, device='cpu')[0]
-    #     detections = sv.Detections.from_ultralytics(results)
-        
-    #     if len(detections.xyxy) == 0:
-    #         rospy.logwarn("⚠️ No object detected in original frame, skipping...")
-    #         return
-        
-    #     # 获取原始图像上的检测框
-    #     x1_orig, y1_orig, x2_orig, y2_orig = map(int, detections.xyxy[0])
-    #     rospy.loginfo(f"🎯 Detected bbox (original): [{x1_orig}, {y1_orig}, {x2_orig}, {y2_orig}]")
-
-    #     # 缩放
-    #     new_w = int(color.shape[1] * self.scale)
-    #     new_h = int(color.shape[0] * self.scale)
-    #     color_resized = cv2.resize(color, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    #     depth_resized = cv2.resize(depth, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
-        
-    #     # cv2.imshow('Camera RGB', color_resized)
-
-    #     # YOLO检测
-    #     # results = self.model.predict(color_resized, imgsz=640, conf=0.5, verbose=False)[0]
-    #     # detections = sv.Detections.from_ultralytics(results)
-    #     # if len(detections.xyxy) == 0:
-    #     #     rospy.logwarn("⚠️ No object detected in frame, skipping...")
-    #     #     return
-        
-    #     # mask
-    #     x1 = int(x1_orig * self.scale)
-    #     y1 = int(y1_orig * self.scale)
-    #     x2 = int(x2_orig * self.scale)
-    #     y2 = int(y2_orig * self.scale)
-    #     mask = np.zeros((new_h, new_w), dtype=np.uint8)
-    #     mask[y1:y2, x1:x2] = 255
-        
-    #     # 保存
-    #     timestamp = f"{self.frame_count:06d}"
-    #     cv2.imwrite(os.path.join(self.color_dir, f"{timestamp}.png"), color_resized)
-    #     cv2.imwrite(os.path.join(self.depth_dir, f"{timestamp}.png"), depth_resized)
-    #     cv2.imwrite(os.path.join(self.masks_dir, f"{timestamp}.png"), mask)
-        
-    #     # 缩放内参
-    #     if self.frame_count == 0 and self.orig_K is not None:
-    #         K_scaled = self.orig_K.copy()
-    #         K_scaled[0, 0] *= self.scale
-    #         K_scaled[1, 1] *= self.scale
-    #         K_scaled[0, 2] *= self.scale
-    #         K_scaled[1, 2] *= self.scale
-    #         np.savetxt(os.path.join(self.base_dir, 'cam_K.txt'), K_scaled, fmt='%.6f')
-    #         rospy.loginfo(f"📏 Saved scaled intrinsics:\n{K_scaled}")
-        
-    #     self.frame_count += 1
-    #     rospy.loginfo(f"💾 Saved frame {self.frame_count}/{self.num_frames}")
-        
-    #     if self.frame_count == self.num_frames:
-    #         rospy.loginfo("🚀 All frames collected. Starting FoundationPose estimation...")
-    #         self.run_foundation_pose()
+    def state_command_callback(self, msg: Bool):
+        """收到布尔状态命令"""
+        if msg.data:  # True -> tracking
+            if not self.find_object:
+                self.find_object = True  
+                self.detected = False
+                rospy.loginfo("🔄 State: finding (开始寻找)")
+                
 
     def synced_callback(self, color_msg, depth_msg):
-        """同步的 RGB + Depth 回调（不缩放版本）"""
+        """同步的 RGB + Depth 回调（不缩放版本）"""      
         
-        if not self.detection_triggered or self.frame_count >= self.num_frames:
+        if not self.find_object or self.frame_count >= self.num_frames or self.detected:
+            rospy.loginfo("🟢 Waiting for state...")
             return
 
-        rospy.loginfo("🔔 synced_callback triggered")
+        rospy.loginfo("🔔 synced_callback triggered")     
 
         # 转CV图像
         color = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
@@ -228,27 +180,30 @@ class FoundationPoseEstimator:
         
         if len(detections.xyxy) == 0:
             rospy.logwarn("⚠️ No object detected in frame, skipping...")
-            return
+            return         
+        
+        self.detected_pub.publish(Bool(data=True)) 
         
         # 获取检测框
         x1, y1, x2, y2 = map(int, detections.xyxy[0])
         rospy.loginfo(f"🎯 Detected bbox: [{x1}, {y1}, {x2}, {y2}]")
-        
-        # 生成 mask（不缩放）
-        h, w = color.shape[:2]
-        mask = np.zeros((h, w), dtype=np.uint8)
-        mask[y1:y2, x1:x2] = 255
+         
         
         # 保存原始尺寸图像
         timestamp = f"{self.frame_count:06d}"
         cv2.imwrite(os.path.join(self.color_dir, f"{timestamp}.png"), color)
         cv2.imwrite(os.path.join(self.depth_dir, f"{timestamp}.png"), depth)
-        cv2.imwrite(os.path.join(self.masks_dir, f"{timestamp}.png"), mask)
+        
         
         # 保存原始内参（仅第一帧）
         if self.frame_count == 0 and self.orig_K is not None:
             np.savetxt(os.path.join(self.base_dir, 'cam_K.txt'), self.orig_K, fmt='%.6f')
             rospy.loginfo(f"📏 Saved original intrinsics:\n{self.orig_K}")
+            # 生成 mask（不缩放）
+            h, w = color.shape[:2]
+            mask = np.zeros((h, w), dtype=np.uint8)
+            mask[y1:y2, x1:x2] = 255
+            cv2.imwrite(os.path.join(self.masks_dir, f"{timestamp}.png"), mask)
         
         self.frame_count += 1
         rospy.loginfo(f"💾 Saved frame {self.frame_count}/{self.num_frames}")
@@ -309,11 +264,8 @@ class FoundationPoseEstimator:
                         K=reader.K,
                         iteration=self.track_refine_iter
                     )
-                
-                self.pose_queue.append(pose)
-                
-                # if self.debug >= 1:
                 center_pose = pose @ np.linalg.inv(to_origin)
+                self.pose_queue.append(center_pose)
                 vis = draw_posed_3d_box(reader.K, img=color, ob_in_cam=center_pose, bbox=bbox)
                 vis = draw_xyz_axis(color, ob_in_cam=center_pose, scale=0.1, K=reader.K,
                                     thickness=3, transparency=0, is_input_rgb=True)
@@ -362,42 +314,98 @@ class FoundationPoseEstimator:
         return avg_pose
     
     def publish_pose(self, pose):
-        """发布位姿到ROS话题"""
-        pose_msg = PoseStamped()
-        pose_msg.header.stamp = rospy.Time.now()
-        pose_msg.header.frame_id = 'camera_color_optical_frame'
-        
-        pose_msg.pose.position.x = pose[0, 3]
-        pose_msg.pose.position.y = pose[1, 3]
-        pose_msg.pose.position.z = pose[2, 3]
-        
+        """发布位姿到ROS话题 (FloatMultiArray格式)"""
+        from std_msgs.msg import MultiArrayDimension, Float32MultiArray
         from scipy.spatial.transform import Rotation
-        from scipy.spatial.transform import Rotation
-        rotation = Rotation.from_matrix(pose[:3, :3])
-        quat = rotation.as_quat()
-        pose_msg.pose.orientation.x = quat[0]
-        pose_msg.pose.orientation.y = quat[1]
-        pose_msg.pose.orientation.z = quat[2]
-        pose_msg.pose.orientation.w = quat[3]
-
-        # 打印旋转矩阵，检查是否需要转置或坐标系转换
+        
+        # 提取位置
+        x = pose[0, 3]
+        y = pose[1, 3]
+        z = pose[2, 3]
+        
+        # 提取旋转并转换为四元数
         R = pose[:3, :3]
-        rospy.loginfo(f"Rotation matrix:\n{R}")
+        rotation = Rotation.from_matrix(R)
+        quat = rotation.as_quat()  # [qx, qy, qz, qw]
         
-        # 尝试不同的 yaw 计算
-        yaw1 = np.arctan2(R[1, 0], R[0, 0]) * 180 / np.pi
-        yaw2 = np.arctan2(R[0, 1], R[0, 0]) * 180 / np.pi
-        yaw3 = np.arctan2(R[1, 0], R[1, 1]) * 180 / np.pi
-        yaw_from_quat = np.arctan2(2.0*(quat[3]*quat[2] + quat[0]*quat[1]), 
-                                1.0 - 2.0*(quat[1]**2 + quat[2]**2)) * 180 / np.pi
-        
-        rospy.loginfo(f"Yaw candidates: {yaw1:.2f}°, {yaw2:.2f}°, {yaw3:.2f}°")
-        rospy.loginfo(f"🔍 Yaw from quat: {yaw_from_quat:.2f}° (should match)")
+        # 计算 yaw 角 (绕 Z 轴旋转)
+        # euler = rotation.as_euler('xyz', degrees=True)  # [roll, pitch, yaw]
+        # yaw = np.arctan2(2.0*(quat[3]*quat[2] + quat[0]*quat[1]), 1.0 - 2.0*(quat[1]**2 + quat[2]**2)) * 180 / np.pi
+        # 输出3个旋转角
         euler = rotation.as_euler('xyz', degrees=True)  # [roll, pitch, yaw]
-        yaw = euler[2]
+        rospy.loginfo(f"🔍 Euler angles (degrees): Roll={euler[0]:.2f}, Pitch={euler[1]:.2f}, Yaw={euler[2]:.2f}")
+        yaw = euler[1]
+        # 构建 FloatMultiArray 消息
+        # 顺序: [x, y, z, yaw, qx, qy, qz, qw]
+        pose_array = Float32MultiArray()
+        pose_array.data = [
+            float(z),
+            float(x),
+            float(y),
+            float(yaw),
+            float(quat[0]),  # qx
+            float(quat[1]),  # qy
+            float(quat[2]),  # qz
+            float(quat[3])   # qw
+        ]
         
-        self.pose_pub.publish(pose_msg)
-        rospy.loginfo(f"📢 Published pose: xyz=({pose[0,3]:.3f}, {pose[1,3]:.3f}, {pose[2,3]:.3f}), yaw={yaw:.2f}°")
+        # 可选：添加维度信息（让接收方知道数组含义）
+        pose_array.layout.dim.append(MultiArrayDimension())
+        pose_array.layout.dim[0].label = "pose"
+        pose_array.layout.dim[0].size = 8
+        pose_array.layout.dim[0].stride = 8
+        
+        # 发布
+        self.pose_pub.publish(pose_array)
+        
+        # 调试信息
+        rospy.loginfo(f"📢 Published pose array:")
+        rospy.loginfo(f"   Position (x, y, z): ({z:.3f}, {x:.3f}, {y:.3f})")
+        rospy.loginfo(f"   Yaw: {yaw:.2f}°")
+        rospy.loginfo(f"   Quaternion (x, y, z, w): ({quat[0]:.3f}, {quat[1]:.3f}, {quat[2]:.3f}, {quat[3]:.3f})")
+        rospy.loginfo(f"   Raw array: {pose_array.data}")
+
+        self.detected = True
+        self.find_object = False  
+    
+    # def publish_pose(self, pose):
+    #     """发布位姿到ROS话题"""
+    #     pose_msg = PoseStamped()
+    #     pose_msg.header.stamp = rospy.Time.now()
+    #     pose_msg.header.frame_id = 'camera_color_optical_frame'
+        
+    #     pose_msg.pose.position.x = pose[0, 3]
+    #     pose_msg.pose.position.y = pose[1, 3]
+    #     pose_msg.pose.position.z = pose[2, 3]
+        
+    #     from scipy.spatial.transform import Rotation
+    #     from scipy.spatial.transform import Rotation
+    #     rotation = Rotation.from_matrix(pose[:3, :3])
+    #     quat = rotation.as_quat()
+    #     pose_msg.pose.orientation.x = quat[0]
+    #     pose_msg.pose.orientation.y = quat[1]
+    #     pose_msg.pose.orientation.z = quat[2]
+    #     pose_msg.pose.orientation.w = quat[3]
+
+    #     # 打印旋转矩阵，检查是否需要转置或坐标系转换
+    #     R = pose[:3, :3]
+    #     rospy.loginfo(f"Rotation matrix:\n{R}")
+        
+    #     # 尝试不同的 yaw 计算
+    #     yaw1 = np.arctan2(R[1, 0], R[0, 0]) * 180 / np.pi
+    #     yaw2 = np.arctan2(R[0, 1], R[0, 0]) * 180 / np.pi
+    #     yaw3 = np.arctan2(R[1, 0], R[1, 1]) * 180 / np.pi
+    #     yaw_from_quat = np.arctan2(2.0*(quat[3]*quat[2] + quat[0]*quat[1]), 
+    #                             1.0 - 2.0*(quat[1]**2 + quat[2]**2)) * 180 / np.pi
+        
+    #     rospy.loginfo(f"Yaw candidates: {yaw1:.2f}°, {yaw2:.2f}°, {yaw3:.2f}°")
+    #     rospy.loginfo(f"🔍 Yaw from quat: {yaw_from_quat:.2f}° (should match)")
+    #     euler = rotation.as_euler('xyz', degrees=True)  # [roll, pitch, yaw]
+    #     yaw = euler[2]
+        
+    #     self.pose_pub.publish(pose_msg)
+    #     rospy.loginfo(f"📢 Published pose: xyz=({pose[0,3]:.3f}, {pose[1,3]:.3f}, {pose[2,3]:.3f}), yaw={yaw:.2f}°")
+    
     def run(self):
         """主循环"""
         rospy.spin()
