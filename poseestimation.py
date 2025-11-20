@@ -1,20 +1,16 @@
-
 import os
 import cv2
-
-# os.environ['CUDA_HOME'] = '/usr/local/cuda'
-# os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-
-# cuda_lib_path = '/usr/local/cuda/lib64'
-# if cuda_lib_path not in os.environ.get('LD_LIBRARY_PATH', ''):
-#     os.environ['LD_LIBRARY_PATH'] = f"{cuda_lib_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
-
+import sys
+import glob
+import torch
 import rospy
 import shutil
 import numpy as np
 import trimesh
 import PIL.Image
 import torch
+import torch.nn as nn
+from torchvision import models, transforms
 from std_msgs.msg import Bool, Float32MultiArray
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PoseStamped
@@ -33,6 +29,55 @@ if torch.cuda.is_available():
 
 from estimater import *
 from datareader import *
+
+# 必須與訓練資料夾 class 名稱一致、排序一致
+class_names = [
+    "chair_0",
+    "chair_135",
+    "chair_180",
+    "chair_225",
+    "chair_270",
+    "chair_315",
+    "chair_45",
+    "chair_90",
+]
+
+# --------------------------
+# Transform
+# --------------------------
+transform = transforms.Compose([
+    transforms.Resize((224,224)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485,0.456,0.406],
+                         [0.229,0.224,0.225])
+])
+
+# --------------------------
+# Load Model
+# --------------------------
+# model is loaded at import time to reuse between calls
+model = models.resnet18()
+model.fc = nn.Linear(model.fc.in_features, 8)
+model.load_state_dict(torch.load("angle_model.pth", map_location="cpu"))
+model.eval()
+
+print("✅ Angle prediction model loaded.")
+
+# --------------------------
+# Predict Function
+# --------------------------
+def predict_angle(img_path):
+    """Predict angle (int) for a single image path using the loaded model."""
+    img = PIL.Image.open(img_path).convert("RGB")
+    x = transform(img).unsqueeze(0)
+
+    with torch.no_grad():
+        outputs = model(x)
+        _, pred = outputs.max(1)
+
+    class_name = class_names[pred.item()]
+    angle = int(class_name.split("_")[1])
+    return angle
 
 class FoundationPoseEstimator:
     def __init__(self):
@@ -59,8 +104,9 @@ class FoundationPoseEstimator:
         self.mesh_file = os.path.join(mesh_dir, 'chair.obj')
         self.tex_file = os.path.join(mesh_dir, 'chair_tex0.png')
         
-        self.yolo_dir = "yolo/detect/train2"
-        self.model_path = os.path.join(self.yolo_dir, "weights/best.pt")
+        # self.yolo_dir = "yolo/detect/train2"
+        # self.model_path = os.path.join(self.yolo_dir, "weights/best.pt")
+        self.model_path = "./best.pt"
         
         from datetime import datetime
         self.timestamp_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -75,17 +121,12 @@ class FoundationPoseEstimator:
 
         # YOLO安全加载
         try:
-            from torch.nn.modules.container import Sequential
-            from torch.nn.modules.conv import Conv2d
-            from torch.nn.modules.batchnorm import BatchNorm2d
-            from torch.nn.modules.activation import SiLU
-            from ultralytics.nn.modules import Detect, C2f, SPPF, Concat, Conv
-            
-            torch.serialization.add_safe_globals([
-                Sequential, Conv2d, BatchNorm2d, SiLU,
-                Detect, C2f, SPPF, Concat, Conv
-            ])
+            # rospy.logwarn(f"Method 1 failed: {e}, trying method 2...")
+            import torch.serialization
+            original_load = torch.load
+            torch.load = lambda *args, **kwargs: original_load(*args, **{**kwargs, 'weights_only': False})
             self.model = YOLO(self.model_path)
+            torch.load = original_load
         except Exception as e:
             rospy.logwarn(f"Method 1 failed: {e}, trying method 2...")
             import torch.serialization
@@ -94,7 +135,7 @@ class FoundationPoseEstimator:
             self.model = YOLO(self.model_path)
             torch.load = original_load
         
-        self.num_frames = rospy.get_param('~num_frames', 10)
+        self.num_frames = rospy.get_param('~num_frames', 20)
         self.scale = rospy.get_param('~scale', 0.5)
         self.est_refine_iter = rospy.get_param('~est_refine_iter', 5)
         self.track_refine_iter = rospy.get_param('~track_refine_iter', 2)
@@ -127,20 +168,10 @@ class FoundationPoseEstimator:
         ats = message_filters.ApproximateTimeSynchronizer([color_sub, depth_sub], queue_size=30, slop=0.5)
         ats.registerCallback(self.synced_callback)
         
-
-        
         set_logging_format()
         set_seed(0)
         
         rospy.loginfo("🟢 FoundationPoseEstimator initialized.")
-
-    # def detection_callback(self, event):
-    #     rospy.loginfo("🔔 Timer triggered, publishing detection message...")
-    #     self.detected_pub.publish(Bool(data=True))  
-    #     # if msg.data and not self.detection_triggered:
-    #     #     self.detection_triggered = True
-    #     #     self.frame_count = 0
-    #     #     rospy.loginfo(f"✅ Detection triggered! Starting to record {self.num_frames} frames...")
 
     def camera_info_callback(self, msg):
         """保存相机内参矩阵 K"""
@@ -164,7 +195,7 @@ class FoundationPoseEstimator:
     def synced_callback(self, color_msg, depth_msg):
         """同步的 RGB + Depth 回调（不缩放版本）"""      
         
-        if not self.find_object or self.frame_count >= self.num_frames or self.detected:
+        if not self.find_object or self.frame_count > self.num_frames + 1 or self.detected:
             rospy.loginfo("🟢 Waiting for state...")
             return
 
@@ -208,9 +239,36 @@ class FoundationPoseEstimator:
         self.frame_count += 1
         rospy.loginfo(f"💾 Saved frame {self.frame_count}/{self.num_frames}")
         
-        if self.frame_count == self.num_frames:
+        # if self.frame_count == self.num_frames:
+            
+        
+        # 额外采集一帧用于角度预测（裁剪后的）
+        if self.frame_count == self.num_frames + 1:
+            rospy.loginfo("📸 Capturing extra frame for angle prediction...")
+            
+            # YOLO检测
+            results = self.model.predict(color, imgsz=640, conf=0.5, verbose=False, device='cpu')[0]
+            detections = sv.Detections.from_ultralytics(results)
+            
+            if len(detections.xyxy) > 0:
+                # 获取检测框
+                x1, y1, x2, y2 = map(int, detections.xyxy[0])
+                
+                # 裁剪图像
+                cropped_img = color[y1:y2, x1:x2]
+                
+                # 保存裁剪后的图像
+                crop_path = os.path.join(self.base_dir, "angle_pred_crop.png")
+                cv2.imwrite(crop_path, cropped_img)
+                rospy.loginfo(f"💾 Saved cropped image for angle prediction: {crop_path}")
+            else:
+                rospy.logwarn("⚠️ No object detected in extra frame, using full image for angle prediction.")
+                crop_path = os.path.join(self.base_dir, "angle_pred_crop.png")
+                cv2.imwrite(crop_path, color)
+
             rospy.loginfo("🚀 All frames collected. Starting FoundationPose estimation...")
             self.run_foundation_pose()
+
     
     def run_foundation_pose(self):
         """运行FoundationPose位姿估计"""
@@ -275,8 +333,6 @@ class FoundationPoseEstimator:
                 cv2.imwrite(vis_path, vis[..., ::-1])  # RGB to BGR
                 rospy.loginfo(f"💾 Saved visualization: {vis_path}")
                 self.saved_vis_count += 1
-                # cv2.imshow('FoundationPose', vis[..., ::-1])
-                # cv2.waitKey(1)
             
             avg_pose = self.compute_average_pose()
             self.publish_pose(avg_pose)
@@ -328,13 +384,19 @@ class FoundationPoseEstimator:
         rotation = Rotation.from_matrix(R)
         quat = rotation.as_quat()  # [qx, qy, qz, qw]
         
-        # 计算 yaw 角 (绕 Z 轴旋转)
-        # euler = rotation.as_euler('xyz', degrees=True)  # [roll, pitch, yaw]
-        # yaw = np.arctan2(2.0*(quat[3]*quat[2] + quat[0]*quat[1]), 1.0 - 2.0*(quat[1]**2 + quat[2]**2)) * 180 / np.pi
         # 输出3个旋转角
-        euler = rotation.as_euler('xyz', degrees=True)  # [roll, pitch, yaw]
-        rospy.loginfo(f"🔍 Euler angles (degrees): Roll={euler[0]:.2f}, Pitch={euler[1]:.2f}, Yaw={euler[2]:.2f}")
-        yaw = euler[1]
+        # img_path = os.path.join(self.color_dir, f"{self.num_frames - 1:06d}.png")
+        img_path = os.path.join(self.base_dir, "angle_pred_crop.png")
+        yaw = 0.0
+        try:
+            if os.path.exists(img_path):
+                # 调用全局定义的 predict_angle 函数
+                yaw = predict_angle(img_path)
+                rospy.loginfo(f"🧭 Predicted yaw angle: {yaw}")
+            else:
+                rospy.logwarn(f"⚠️ Angle prediction image not found: {img_path}")
+        except Exception as e:
+            rospy.logerr(f"❌ Angle prediction failed: {e}")
         # 构建 FloatMultiArray 消息
         # 顺序: [x, y, z, yaw, qx, qy, qz, qw]
         pose_array = Float32MultiArray()
@@ -342,7 +404,7 @@ class FoundationPoseEstimator:
             float(z),
             float(x),
             float(y),
-            float(yaw),
+            float(yaw*np.pi/180.0),
             float(quat[0]),  # qx
             float(quat[1]),  # qy
             float(quat[2]),  # qz
@@ -368,43 +430,6 @@ class FoundationPoseEstimator:
         self.detected = True
         self.find_object = False  
     
-    # def publish_pose(self, pose):
-    #     """发布位姿到ROS话题"""
-    #     pose_msg = PoseStamped()
-    #     pose_msg.header.stamp = rospy.Time.now()
-    #     pose_msg.header.frame_id = 'camera_color_optical_frame'
-        
-    #     pose_msg.pose.position.x = pose[0, 3]
-    #     pose_msg.pose.position.y = pose[1, 3]
-    #     pose_msg.pose.position.z = pose[2, 3]
-        
-    #     from scipy.spatial.transform import Rotation
-    #     from scipy.spatial.transform import Rotation
-    #     rotation = Rotation.from_matrix(pose[:3, :3])
-    #     quat = rotation.as_quat()
-    #     pose_msg.pose.orientation.x = quat[0]
-    #     pose_msg.pose.orientation.y = quat[1]
-    #     pose_msg.pose.orientation.z = quat[2]
-    #     pose_msg.pose.orientation.w = quat[3]
-
-    #     # 打印旋转矩阵，检查是否需要转置或坐标系转换
-    #     R = pose[:3, :3]
-    #     rospy.loginfo(f"Rotation matrix:\n{R}")
-        
-    #     # 尝试不同的 yaw 计算
-    #     yaw1 = np.arctan2(R[1, 0], R[0, 0]) * 180 / np.pi
-    #     yaw2 = np.arctan2(R[0, 1], R[0, 0]) * 180 / np.pi
-    #     yaw3 = np.arctan2(R[1, 0], R[1, 1]) * 180 / np.pi
-    #     yaw_from_quat = np.arctan2(2.0*(quat[3]*quat[2] + quat[0]*quat[1]), 
-    #                             1.0 - 2.0*(quat[1]**2 + quat[2]**2)) * 180 / np.pi
-        
-    #     rospy.loginfo(f"Yaw candidates: {yaw1:.2f}°, {yaw2:.2f}°, {yaw3:.2f}°")
-    #     rospy.loginfo(f"🔍 Yaw from quat: {yaw_from_quat:.2f}° (should match)")
-    #     euler = rotation.as_euler('xyz', degrees=True)  # [roll, pitch, yaw]
-    #     yaw = euler[2]
-        
-    #     self.pose_pub.publish(pose_msg)
-    #     rospy.loginfo(f"📢 Published pose: xyz=({pose[0,3]:.3f}, {pose[1,3]:.3f}, {pose[2,3]:.3f}), yaw={yaw:.2f}°")
     
     def run(self):
         """主循环"""

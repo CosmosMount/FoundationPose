@@ -15,7 +15,7 @@ class RealSenseYoloNode:
 
         # YOLO模型
         self.train_dir = "detect/train2"
-        self.model_path = os.path.join(self.train_dir, "weights/best.pt")
+        self.model_path = "./best.pt"
         self.model = YOLO(self.model_path)
 
         # 订阅彩色图像

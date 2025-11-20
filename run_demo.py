@@ -22,7 +22,7 @@ if __name__=='__main__':
   mesh_dir = "meshes/chair3/"
   mesh_file = os.path.join(mesh_dir, "chair.obj")
   tex_file = os.path.join(mesh_dir, "chair_tex0.png")
-  test_scene_dir = "demo_data/data8"
+  test_scene_dir = "demo_data/data10"
 
 
   set_logging_format()
